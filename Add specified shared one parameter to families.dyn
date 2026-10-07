@@ -1,0 +1,547 @@
+{
+  "Uuid": "0c26d5c4-428d-42dc-9e56-4b41dac19a17",
+  "IsCustomNode": false,
+  "Description": "",
+  "Name": "БД_Фильтр_GKES_Добавить в семейства заданный общий параметр",
+  "ElementResolver": {
+    "ResolutionMap": {
+      "List": {
+        "Key": "List",
+        "Value": "BuiltIn.ds"
+      }
+    }
+  },
+  "Inputs": [],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "import clr\r\nimport System\r\n\r\nclr.AddReference('RevitServices')\r\nimport RevitServices\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\nclr.AddReference('RevitAPI')\r\nimport Autodesk\r\nfrom Autodesk.Revit.DB import *\r\nfrom Autodesk.Revit.DB.Structure import StructuralType\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\n\r\n# Получаем данные со входов Dynamo\r\nraw_data = IN[0]   # Таблица из Excel (Вход IN[0])\r\nstep_mm = IN[1]    # Величина смещения в мм (Вход IN[1])\r\n\r\n# Переводим шаг смещения из мм в футы Revit\r\ntry:\r\n    step_feet = float(step_mm) / 304.8\r\nexcept:\r\n    step_feet = 1000.0 / 304.8 # Шаг по умолчанию (1 метр), если на вход ничего не подали\r\n\r\n# Извлекаем чистые пути к файлам семейства\r\npaths = []\r\nif isinstance(raw_data, list):\r\n    for item in raw_data:\r\n        if isinstance(item, list):\r\n            for subitem in item:\r\n                if subitem and \".rfa\" in str(subitem).lower():\r\n                    paths.append(str(subitem).strip())\r\n        elif item and \".rfa\" in str(item).lower():\r\n            paths.append(str(item).strip())\r\n\r\n# Собираем уровни проекта для размещения\r\nall_levels = FilteredElementCollector(doc).OfClass(Level).ToElements()\r\nbase_level = all_levels[0] if len(all_levels) > 0 else None\r\n\r\ncreated_instances = []\r\n\r\n# Начальная координата X (начнем с 0)\r\ncurrent_x_feet = 0.0\r\ndefault_y_feet = 0.0\r\ndefault_z_feet = 0.0\r\n\r\nTransactionManager.Instance.EnsureInTransaction(doc)\r\n\r\n# Жестко указываем CPython3 перегрузку LoadFamily, принимающую только строку\r\nload_family_by_path = doc.LoadFamily.Overloads[System.String]\r\n\r\nfor path in paths:\r\n    fam_name = path.split('\\\\')[-1].replace('.rfa', '').strip()\r\n    family = None\r\n    \r\n    try:\r\n        # 1. Проверяем, загружено ли семейство в проект\r\n        for f in FilteredElementCollector(doc).OfClass(Family):\r\n            if f.Name.lower() == fam_name.lower():\r\n                family = f\r\n                break\r\n                \r\n        # 2. Если семейства нет в памяти проекта — загружаем его универсальным вызовом\r\n        if not family:\r\n            # Исправлено: принимаем одиночный результат загрузки (без распаковки кортежа)\r\n            loaded_result = load_family_by_path(path)\r\n            \r\n            # Если вернулся объект типа Family\r\n            if isinstance(loaded_result, Family):\r\n                family = loaded_result\r\n            # Если вернулся bool (True) или объект загрузился, ищем его в базе проекта по имени\r\n            else:\r\n                for f in FilteredElementCollector(doc).OfClass(Family):\r\n                    if f.Name.lower() == fam_name.lower():\r\n                        family = f\r\n                        break\r\n        \r\n        # 3. Если семейство успешно найдено или загружено — создаем его экземпляр\r\n        if family:\r\n            symbols_ids = list(family.GetFamilySymbolIds())\r\n            if symbols_ids and len(symbols_ids) > 0:\r\n                first_symbol_id = symbols_ids[0]\r\n                symbol = doc.GetElement(first_symbol_id)\r\n                \r\n                if not symbol.IsActive:\r\n                    symbol.Activate()\r\n                \r\n                # Создаем точку со смещением по оси X\r\n                target_point = XYZ(current_x_feet, default_y_feet, default_z_feet)\r\n                \r\n                # Размещаем элемент\r\n                if base_level:\r\n                    instance = doc.Create.NewFamilyInstance(target_point, symbol, base_level, StructuralType.NonStructural)\r\n                else:\r\n                    instance = doc.Create.NewFamilyInstance(target_point, symbol, StructuralType.NonStructural)\r\n                \r\n                if instance:\r\n                    current_x_mm = round(current_x_feet * 304.8)\r\n                    created_instances.append(\"Успешно создан: {} (X = {} мм)\".format(fam_name, current_x_mm))\r\n                    \r\n                    # Увеличиваем координату X на заданный шаг для следующего прибора\r\n                    current_x_feet += step_feet\r\n                else:\r\n                    created_instances.append(\"Ошибка генерации экземпляра: \" + fam_name)\r\n            else:\r\n                created_instances.append(\"В семействе отсутствуют типы: \" + fam_name)\r\n        else:\r\n            created_instances.append(\"Не удалось загрузить rfa-файл: \" + fam_name)\r\n            \r\n    except Exception as e:\r\n        created_instances.append(\"Сбой на элементе {}: {}\".format(fam_name, str(e)))\r\n\r\nTransactionManager.Instance.TransactionTaskDone()\r\n\r\n# Выводим финальный отчет в нод Watch\r\nif not created_instances:\r\n    OUT = [\"Скрипт не обнаружил путей к файлам семейства .rfa.\"]\r\nelse:\r\n    OUT = created_instances\r\n",
+      "Engine": "CPython3",
+      "VariableInputPorts": true,
+      "Id": "310fd9d10916459798f8b42f3bc5e71a",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "2f80321d18b34e1f8cb58fcd58471ab8",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "d7b833da3f4b44808c28ca9b589b9742",
+          "Name": "IN[1]",
+          "Description": "Input #1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "bab33e8b58894e7eb707670cd9cf9b38",
+          "Name": "OUT",
+          "Description": "Результат сценария Python",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Выполнение встроенного сценария Python."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.Filename, CoreNodeModels",
+      "Id": "42770c1b6ed44b46a30d719651f6be08",
+      "NodeType": "ExtensionNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "7dc9d98c86e642dc84ae4c58c5e59fb4",
+          "Name": "",
+          "Description": "Путь к файлу",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Возможность выбрать файл в системе и возврат пути к нему",
+      "HintPath": "C:\\Users\\popovvs1\\Desktop\\JOB\\REVIT\\Семейства\\Таблицы семейств\\БД_свойств_семейств_матрица_параметров_28.08.2026.xlsm",
+      "InputValue": "..\\Семейства\\Таблицы семейств\\БД_свойств_семейств_матрица_параметров_28.08.2026.xlsm"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.FromObject, CoreNodeModels",
+      "Id": "23b9967b4fc74c0eb2e6027c06c1a938",
+      "NodeType": "ExtensionNode",
+      "Inputs": [
+        {
+          "Id": "056769aa16024ab2976c1bf4727bbc04",
+          "Name": "object",
+          "Description": "Объект индексации",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "9b7740e7c2a34196a93b99267c8e9141",
+          "Name": "string",
+          "Description": "Строчное представление объекта",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Преобразование объекта в строчное представление"
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.ZeroTouch.DSFunction, DynamoCore",
+      "Id": "da13f02669bc4d68b62b32c38b290bb4",
+      "NodeType": "FunctionNode",
+      "Inputs": [
+        {
+          "Id": "c9d2004a6afd46339e3b03d7036475b5",
+          "Name": "filePath",
+          "Description": "string",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "3867deaaec9a41069c7f3fe3a246949e",
+          "Name": "sheetName",
+          "Description": "string",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "615fa79cb6434c34a181286919f09923",
+          "Name": "startRow",
+          "Description": "int\nЗначение по умолчанию : 0",
+          "UsingDefaultValue": true,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "80fc6cdfe52944378cf2be3e01a734ce",
+          "Name": "startColumn",
+          "Description": "int\nЗначение по умолчанию : 0",
+          "UsingDefaultValue": true,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "a0255f6b2d30484d84893c13897d21ba",
+          "Name": "readAsString",
+          "Description": "bool\nЗначение по умолчанию : false",
+          "UsingDefaultValue": true,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "1889d0bdd376499ba53ed9822a904ff0",
+          "Name": "var[][]",
+          "Description": "var[][]",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "FunctionSignature": "DSOffice.Data.OpenXMLImportExcel@string,string,int,int,bool",
+      "Replication": "Auto",
+      "Description": "Data.OpenXMLImportExcel (filePath: string, sheetName: string, startRow: int = 0, startColumn: int = 0, readAsString: bool = false): var[][]"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.StringInput, CoreNodeModels",
+      "SerializedWidth": 0.0,
+      "SerializedHeight": 0.0,
+      "Id": "858a6794502c4d33aefd16ac301a3a97",
+      "NodeType": "StringInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "e183a64e91b64094ac6a4ad244bea2d0",
+          "Name": "",
+          "Description": "String",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Создание строки.",
+      "InputValue": "GKES"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
+      "Id": "41aa55ce480745118ee0b216bbea4005",
+      "NodeType": "BooleanInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "1abda646662c47ffbc23f777bcf4fc85",
+          "Name": "",
+          "Description": "Boolean",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Возможность выбора между значениями True и False",
+      "InputValue": true
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.DoubleInput, CoreNodeModels",
+      "NumberType": "Double",
+      "Id": "f7b5da6ddb764473aea1f5b0d3b870fd",
+      "NodeType": "NumberInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "16b7748223af469e9625850b42b9c84b",
+          "Name": "",
+          "Description": "Double",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Создание числа.",
+      "InputValue": 0.0
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Watch, CoreNodeModels",
+      "WatchWidth": 743.0,
+      "WatchHeight": 57.0,
+      "Id": "b4e33ec0bc3d4a929795e745d8d0ede3",
+      "NodeType": "ExtensionNode",
+      "Inputs": [
+        {
+          "Id": "4bd67ae0678f40128315b706522b8ba1",
+          "Name": "",
+          "Description": "Узел для отображения выходных данных",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "9f3509a22ebd4665be341004bf259328",
+          "Name": "",
+          "Description": "Выходные данные узла",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Визуализация выходных данных узла"
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.ZeroTouch.DSFunction, DynamoCore",
+      "Id": "8bb4356c0b44486b8d51c19dfef12c35",
+      "NodeType": "FunctionNode",
+      "Inputs": [
+        {
+          "Id": "c896ef2dcd0849f1bfd7cc5db35df6e6",
+          "Name": "list",
+          "Description": "Список для выравнивания.\n\nvar[]..[]",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "5a2232b9f822439d9369c2b53fcdc249",
+          "Name": "amount",
+          "Description": "Слои в списке, которые требуется исключить (–1 приведет к удалению всех вложенных в список слоев)\n\nint\nЗначение по умолчанию : -1",
+          "UsingDefaultValue": true,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "58ca5ec88de5459eb96db978f910be15",
+          "Name": "list",
+          "Description": "Список с выравниванием по объему",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "FunctionSignature": "DSCore.List.Flatten@var[]..[],int",
+      "Replication": "Auto",
+      "Description": "Выравнивание вложенного списка списков по определенному количественному значению.\n\nList.Flatten (list: var[]..[], amount: int = -1): var[]..[]"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.DoubleInput, CoreNodeModels",
+      "NumberType": "Double",
+      "Id": "aa6e50d1b69148f9b3f40a9395e62061",
+      "NodeType": "NumberInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "c4ba29300bd345e7b6bfe07022d1a50c",
+          "Name": "",
+          "Description": "Double",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Создание числа.",
+      "InputValue": 1000.0
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "bab33e8b58894e7eb707670cd9cf9b38",
+      "End": "4bd67ae0678f40128315b706522b8ba1",
+      "Id": "3e363fcc2e37428c87ca9c6f1b094fed",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "7dc9d98c86e642dc84ae4c58c5e59fb4",
+      "End": "056769aa16024ab2976c1bf4727bbc04",
+      "Id": "1b8ce536d8a74d7da3fd1fedf842ecf0",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "9b7740e7c2a34196a93b99267c8e9141",
+      "End": "c9d2004a6afd46339e3b03d7036475b5",
+      "Id": "79ed6ddedff9441eab2025a8646244e2",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "1889d0bdd376499ba53ed9822a904ff0",
+      "End": "c896ef2dcd0849f1bfd7cc5db35df6e6",
+      "Id": "66f310e8c5fb4297a9d6f63d47c7db7f",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "e183a64e91b64094ac6a4ad244bea2d0",
+      "End": "3867deaaec9a41069c7f3fe3a246949e",
+      "Id": "aaa9e70f6d094c9c8dba1ef92f65e6f7",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "1abda646662c47ffbc23f777bcf4fc85",
+      "End": "a0255f6b2d30484d84893c13897d21ba",
+      "Id": "e246c20980d24a44a11346aeceba1cee",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "16b7748223af469e9625850b42b9c84b",
+      "End": "615fa79cb6434c34a181286919f09923",
+      "Id": "3e48e00b78084c5f8716e4fc9f401bae",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "16b7748223af469e9625850b42b9c84b",
+      "End": "80fc6cdfe52944378cf2be3e01a734ce",
+      "Id": "e12ea57fff1d495382ab0ca565899f5c",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "58ca5ec88de5459eb96db978f910be15",
+      "End": "2f80321d18b34e1f8cb58fcd58471ab8",
+      "Id": "c0870bc36b6e4c35a19ef072c4fa6e3c",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "c4ba29300bd345e7b6bfe07022d1a50c",
+      "End": "d7b833da3f4b44808c28ca9b589b9742",
+      "Id": "86f60dbc506a4b62b7243dce4301fca9",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [],
+  "EnableLegacyPolyCurveBehavior": true,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Свойства",
+      "Version": "3.6",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "9.1",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "Нет",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "3.6.1.9895",
+      "RunType": "Manual",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Фоновый просмотр",
+      "EyeX": -15.750494956970215,
+      "EyeY": 22.64636993408203,
+      "EyeZ": 43.960723876953125,
+      "LookX": 10.750494956970215,
+      "LookY": -11.646369934082031,
+      "LookZ": -51.960723876953125,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "310fd9d10916459798f8b42f3bc5e71a",
+        "Name": "Python Script",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 1119.2741020304616,
+        "Y": 129.83514899383954
+      },
+      {
+        "Id": "42770c1b6ed44b46a30d719651f6be08",
+        "Name": "File Path",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -551.5339274697526,
+        "Y": 108.84538992839481
+      },
+      {
+        "Id": "23b9967b4fc74c0eb2e6027c06c1a938",
+        "Name": "String from Object",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 294.1594862594405,
+        "Y": 123.75572207869408
+      },
+      {
+        "Id": "da13f02669bc4d68b62b32c38b290bb4",
+        "Name": "Data.OpenXMLImportExcel",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 592.1124930466,
+        "Y": 125.64748720115216
+      },
+      {
+        "Id": "858a6794502c4d33aefd16ac301a3a97",
+        "Name": "String",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 298.55542737096596,
+        "Y": 251.6761300308287
+      },
+      {
+        "Id": "41aa55ce480745118ee0b216bbea4005",
+        "Name": "Boolean",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 299.43628537308393,
+        "Y": 519.8401918788234
+      },
+      {
+        "Id": "f7b5da6ddb764473aea1f5b0d3b870fd",
+        "Name": "Number",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 303.07997736843527,
+        "Y": 384.3720533808701
+      },
+      {
+        "Id": "b4e33ec0bc3d4a929795e745d8d0ede3",
+        "Name": "Watch",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 1312.633195897275,
+        "Y": 130.04493006551274
+      },
+      {
+        "Id": "8bb4356c0b44486b8d51c19dfef12c35",
+        "Name": "List.Flatten",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 889.4068505266632,
+        "Y": 127.53256372343043
+      },
+      {
+        "Id": "aa6e50d1b69148f9b3f40a9395e62061",
+        "Name": "Number",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 949.7449041920863,
+        "Y": 345.5318916586267
+      }
+    ],
+    "Annotations": [],
+    "X": 403.22826319304727,
+    "Y": 135.54315012261765,
+    "Zoom": 0.6000816380832584
+  }
+}

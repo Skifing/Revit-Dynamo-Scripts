@@ -1,0 +1,708 @@
+{
+  "Uuid": "70dfd576-8251-455d-9988-ef47d7735722",
+  "IsCustomNode": false,
+  "Description": "",
+  "Name": "Массовое добавление параметра ФОП в семейства из папки с папкой исключением",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "import clr\r\nimport re  # Импортируем регулярные выражения для фильтрации бэкапов\r\n\r\n# Импортируем службы Dynamo для работы с документом\r\nclr.AddReference('RevitServices')\r\nfrom RevitServices.Persistence import DocumentManager\r\n\r\n# Импортируем API Revit\r\nclr.AddReference('RevitAPI')\r\nfrom Autodesk.Revit.DB import *\r\n\r\n# Получаем доступ к приложению Revit\r\napp = DocumentManager.Instance.CurrentUIApplication.Application\r\n\r\n# Входные данные из нодов Dynamo (строго по порядку)\r\nfam_paths = IN[0]\r\nparam_name = IN[1]\r\ngroup_text = IN[2]  \r\nis_instance = IN[3]\r\nexclude_folder_path = IN[4]  # ПУТЬ К ПАПКЕ-ИСКЛЮЧЕНИЮ ИЗ НОДА DIRECTORY PATH\r\n\r\n# Превращаем входной путь в список, если подан всего один файл\r\nif not isinstance(fam_paths, list):\r\n    fam_paths = [fam_paths]\r\n\r\n# 1. Открываем ФОП и ищем определение параметра\r\ndef_file = app.OpenSharedParameterFile()\r\ntarget_def = None\r\n\r\nif def_file:\r\n    for group in def_file.Groups:\r\n        target_def = group.Definitions.get_Item(param_name)\r\n        if target_def:\r\n            break\r\n\r\n# Список для сбора результатов по каждому файлу\r\nresults = []\r\n\r\nif not target_def:\r\n    results.append(\"Параметр не найден в ФОП или ФОП не подключен в Revit.\")\r\nelse:\r\n    # 2. Получаем правильный ForgeTypeId для группы параметров\r\n    try:\r\n        param_group = getattr(GroupTypeId, group_text)\r\n    except AttributeError:\r\n        param_group = GroupTypeId.Data\r\n\r\n    # 3. Запускаем цикл по всем путям к семействам\r\n    for path in fam_paths:\r\n        if path is None: \r\n            continue\r\n            \r\n        # ПРОВЕРКА ИСКЛЮЧЕНИЯ: если путь файла начинается с пути исключаемой папки\r\n        if exclude_folder_path and exclude_folder_path.lower() in path.lower():\r\n            results.append(f\"{path} -> Пропущен (находится в исключенной папке)\")\r\n            continue\r\n            \r\n        # Проверяем, не является ли файл бэкапом вида .0001.rfa\r\n        if re.search(r\"\\.\\d{4}\\.rfa$\", path, re.IGNORECASE):\r\n            results.append(f\"{path} -> Пропущен (это файл резервной копии)\")\r\n            continue\r\n            \r\n        try:\r\n            # Открываем семейство в фоновом режиме\r\n            fam_doc = app.OpenDocumentFile(path)\r\n            \r\n            if fam_doc.IsFamilyDocument:\r\n                fam_manager = fam_doc.FamilyManager\r\n                \r\n                # Добавляем параметр через транзакцию\r\n                tx = Transaction(fam_doc, \"Add Shared Parameter\")\r\n                tx.Start()\r\n                try:\r\n                    fam_manager.AddParameter(target_def, param_group, is_instance)\r\n                    tx.Commit()\r\n                    \r\n                    # Сохраняем и закрываем файл семейства\r\n                    fam_doc.Save()\r\n                    fam_doc.Close(False)\r\n                    results.append(f\"{path} -> Успешно добавлен\")\r\n                except Exception as e:\r\n                    tx.RollBack()\r\n                    fam_doc.Close(False)\r\n                    results.append(f\"{path} -> Ошибка добавления: {str(e)}\")\r\n            else:\r\n                fam_doc.Close(False)\r\n                results.append(f\"{path} -> Файл не является семейством (.rfa)\")\r\n                \r\n        except Exception as e:\r\n            results.append(f\"{path} -> Не удалось открыть файл: {str(e)}\")\r\n\r\n# Выводим отчет по каждому файлу на выход нода\r\nOUT = results\r\n",
+      "Engine": "CPython3",
+      "VariableInputPorts": true,
+      "Id": "d91762324ac34552ba79135ec513c992",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "66871aa920ad44e190f9ddcd42af967b",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "c34bead9fa7247938c9f810dc7e7ec2e",
+          "Name": "IN[1]",
+          "Description": "Input #1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "e906fb454a4a4a879b64b3c21a11a150",
+          "Name": "IN[2]",
+          "Description": "Input #2",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "297c968d36294448804a131cee1157b1",
+          "Name": "IN[3]",
+          "Description": "Input #3",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "d259494d371e40a59a4293c616536bde",
+          "Name": "IN[4]",
+          "Description": "Input #4",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "8a470db7a269476cb9c3f519f3625361",
+          "Name": "OUT",
+          "Description": "Результат сценария Python",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Выполнение встроенного сценария Python."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.Directory, CoreNodeModels",
+      "Id": "8656e17981fa4a0298c19d9e8eb68ba8",
+      "NodeType": "ExtensionNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "377c444116d244bc9b0f5892cd6472d8",
+          "Name": "",
+          "Description": "Путь к каталогу",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Возможность выбрать каталог в системе и возврат пути к нему",
+      "HintPath": "S:\\ㅤМежпроектные данные\\00.  ООО ПИ «АЛЬТАИР»\\02. Библиотека семейств Autodesk Revit",
+      "InputValue": "S:\\ㅤМежпроектные данные\\00.  ООО ПИ «АЛЬТАИР»\\02. Библиотека семейств Autodesk Revit"
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.ZeroTouch.DSFunction, DynamoCore",
+      "Id": "1f843d8766f44941a67b91e66012c540",
+      "NodeType": "FunctionNode",
+      "Inputs": [
+        {
+          "Id": "53becc8a9a644323a096ea4164d11151",
+          "Name": "directory",
+          "Description": "Каталог для получения содержимого\n\nvar",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "2bde4e8206b641f9962373ea848a591e",
+          "Name": "searchString",
+          "Description": "Строка поиска для фильтрации результатов\n\nstring\nЗначение по умолчанию : \"*.*\"",
+          "UsingDefaultValue": true,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "85ab76f32a33469d969bb801dc6122a4",
+          "Name": "includeSubdirectories",
+          "Description": "Задайте значение True, чтобы включить файлы и папки во вложенные каталоги (рекурсивные), или значение False, чтобы включить результаты только из указанного каталога верхнего уровня.\n\nbool\nЗначение по умолчанию : false",
+          "UsingDefaultValue": true,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "1638625f9774425f8f6ca316ae76c54d",
+          "Name": "files",
+          "Description": "Файлы, полученные по запросу",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "7dee0edc9a7a482da2a34b38dc7730e7",
+          "Name": "directories",
+          "Description": "Каталоги, полученные по запросу",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "FunctionSignature": "DSCore.IO.FileSystem.GetDirectoryContents@var,string,bool",
+      "Replication": "Auto",
+      "Description": "Вывод списка файлов и папок, которые содержатся в данном каталоге. Для фильтрации результатов можно использовать searchString (необязательно).\n\nFileSystem.GetDirectoryContents (directory: var, searchString: string = \"*.*\", includeSubdirectories: bool = false): var[]..[]"
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.ZeroTouch.DSFunction, DynamoCore",
+      "Id": "d6660bebb4e04ee197b3908e6c441300",
+      "NodeType": "FunctionNode",
+      "Inputs": [
+        {
+          "Id": "7d2804f0670646eba38080e93a4776fa",
+          "Name": "list",
+          "Description": "Список, который требуется отфильтровать.\n\nvar[]..[]",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "ed7a9371dec142829e535532dd18c8f2",
+          "Name": "mask",
+          "Description": "Список логических операций, представляющих маску.\n\nvar[]..[]",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "7fdec955047149d090358d6ba5582a11",
+          "Name": "in",
+          "Description": "Элементы, индекс маски которых имеет значение «истина».",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "e48df9f4cef34986a288de89f64dcbed",
+          "Name": "out",
+          "Description": "Элементы, индекс маски которых имеет значение «ложь».",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "FunctionSignature": "DSCore.List.FilterByBoolMask@var[]..[],var[]..[]",
+      "Replication": "Auto",
+      "Description": "Фильтрация последовательности путем поиска соответствующих индексов в отдельном списке логических операций.\n\nList.FilterByBoolMask (list: var[]..[], mask: var[]..[]): var[]..[]"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.StringInput, CoreNodeModels",
+      "SerializedWidth": 0.0,
+      "SerializedHeight": 0.0,
+      "Id": "9fe2713400de4bba858f40c5d210693a",
+      "NodeType": "StringInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "9511adc71e1142e79f07897436fdff13",
+          "Name": "",
+          "Description": "String",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Создание строки.",
+      "InputValue": ".rfa"
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.ZeroTouch.DSFunction, DynamoCore",
+      "Id": "5353e960dac34594a474df81ae752fe4",
+      "NodeType": "FunctionNode",
+      "Inputs": [
+        {
+          "Id": "f0450f44ab9942de9ea9474988070328",
+          "Name": "string",
+          "Description": "Строка, в конце которой требуется осуществить поиск\n\nstring",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "689dddb48ca140499a46bd5d2a437ba3",
+          "Name": "searchFor",
+          "Description": "Подстрока, которую требуется найти в конце строки\n\nstring",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "9f827f3f2df84b709227aa730fc25dfb",
+          "Name": "ignoreCase",
+          "Description": "True — игнорировать регистр при сравнении, False — учитывать регистр при сравнении\n\nbool\nЗначение по умолчанию : false",
+          "UsingDefaultValue": true,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "f218a423d6da4e5fb0a7b73bd1246b04",
+          "Name": "bool",
+          "Description": "True — строка начинается подстрокой, False — не начинается",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "FunctionSignature": "DSCore.String.EndsWith@string,string,bool",
+      "Replication": "Auto",
+      "Description": "Определение того, заканчивается ли данная строка данной подстрокой.\n\nString.EndsWith (string: string, searchFor: string, ignoreCase: bool = false): bool"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.DirectoryObject, CoreNodeModels",
+      "Id": "2b9c9a1270fd4ce9a40dbfbb01c3d48a",
+      "NodeType": "ExtensionNode",
+      "Inputs": [
+        {
+          "Id": "a0a279b20ec64128868b2cb0f2fd5b27",
+          "Name": "path",
+          "Description": "Путь к папке (тип: строка)",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "81514e2e2dd047868d42b30c5d8cb975",
+          "Name": "directory",
+          "Description": "Папка объекта.",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Создание объекта каталога на основе указанного пути"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.StringInput, CoreNodeModels",
+      "SerializedWidth": 0.0,
+      "SerializedHeight": 0.0,
+      "Id": "e02a96f9c2ca43e6b645c06fe72b7d77",
+      "NodeType": "StringInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "d6f5adf76e354f0cbf1eb1497024413e",
+          "Name": "",
+          "Description": "String",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Создание строки.",
+      "InputValue": "GKES_Сметы_Расчет расхода"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.StringInput, CoreNodeModels",
+      "SerializedWidth": 0.0,
+      "SerializedHeight": 0.0,
+      "Id": "317e8d7ae7fa436db62bd9cc15decb4b",
+      "NodeType": "StringInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "a84307193c48456cb316757432bbff2c",
+          "Name": "",
+          "Description": "String",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Создание строки.",
+      "InputValue": "01 Обязательные ОБЩИЕ"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
+      "Id": "b3ec46aa6ae0419b91a62d4bbee72ef1",
+      "NodeType": "BooleanInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "9260ae47d3d4452392faa5dfcf721743",
+          "Name": "",
+          "Description": "Boolean",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Возможность выбора между значениями True и False",
+      "InputValue": true
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Watch, CoreNodeModels",
+      "WatchWidth": 200.0,
+      "WatchHeight": 200.0,
+      "Id": "74406ab12276477c9eaec9e57ad0eb24",
+      "NodeType": "ExtensionNode",
+      "Inputs": [
+        {
+          "Id": "13dab663326c4aa9969f5e211b500bc0",
+          "Name": "",
+          "Description": "Узел для отображения выходных данных",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "5b842c7f3b444e62b15f090090f62e7f",
+          "Name": "",
+          "Description": "Выходные данные узла",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Визуализация выходных данных узла"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
+      "Id": "e1144bab592e4a92a3a558da243b93d0",
+      "NodeType": "BooleanInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "a5abe739d1f94055a36e7e64f2a701ea",
+          "Name": "",
+          "Description": "Boolean",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Возможность выбора между значениями True и False",
+      "InputValue": true
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.Directory, CoreNodeModels",
+      "Id": "a71759fd75df432cb5ee6d4cc3f5cf13",
+      "NodeType": "ExtensionNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "aa0b2635ae224bc2aa45d386cdce1d79",
+          "Name": "",
+          "Description": "Путь к каталогу",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Возможность выбрать каталог в системе и возврат пути к нему",
+      "HintPath": "S:\\ㅤМежпроектные данные\\00.  ООО ПИ «АЛЬТАИР»\\02. Библиотека семейств Autodesk Revit\\00_ОБЩИЕ",
+      "InputValue": "S:\\ㅤМежпроектные данные\\00.  ООО ПИ «АЛЬТАИР»\\02. Библиотека семейств Autodesk Revit\\00_ОБЩИЕ"
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "8a470db7a269476cb9c3f519f3625361",
+      "End": "13dab663326c4aa9969f5e211b500bc0",
+      "Id": "54d58107f8054300965598d253270a93",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "377c444116d244bc9b0f5892cd6472d8",
+      "End": "a0a279b20ec64128868b2cb0f2fd5b27",
+      "Id": "e5ffae386fc34da697b671d3e11e8b8a",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "1638625f9774425f8f6ca316ae76c54d",
+      "End": "f0450f44ab9942de9ea9474988070328",
+      "Id": "1fc84da76ec14e8c92b48aa422dfb9f9",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "1638625f9774425f8f6ca316ae76c54d",
+      "End": "7d2804f0670646eba38080e93a4776fa",
+      "Id": "f2faf5217f4a4864a9347c06b8db2e3f",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "7fdec955047149d090358d6ba5582a11",
+      "End": "66871aa920ad44e190f9ddcd42af967b",
+      "Id": "c7f7ccda567e4c6caffe5d0009666183",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "9511adc71e1142e79f07897436fdff13",
+      "End": "689dddb48ca140499a46bd5d2a437ba3",
+      "Id": "a9a16ca895d44ef0818d3847a83f8c97",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "f218a423d6da4e5fb0a7b73bd1246b04",
+      "End": "ed7a9371dec142829e535532dd18c8f2",
+      "Id": "105ef264f6cf47e49320c79aa3b75227",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "81514e2e2dd047868d42b30c5d8cb975",
+      "End": "53becc8a9a644323a096ea4164d11151",
+      "Id": "c62dfd3f4d604c679b1df720c13d0003",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "d6f5adf76e354f0cbf1eb1497024413e",
+      "End": "c34bead9fa7247938c9f810dc7e7ec2e",
+      "Id": "c7d8dd3ba8284514aafe3699055731aa",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "a84307193c48456cb316757432bbff2c",
+      "End": "e906fb454a4a4a879b64b3c21a11a150",
+      "Id": "c13a4fe32ab140f0b277e4cc4f57dd4b",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "9260ae47d3d4452392faa5dfcf721743",
+      "End": "297c968d36294448804a131cee1157b1",
+      "Id": "a268f36129d344ff98db026d7a0f8147",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "a5abe739d1f94055a36e7e64f2a701ea",
+      "End": "85ab76f32a33469d969bb801dc6122a4",
+      "Id": "2049c6e873a04ad18dbc017395c40f60",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "aa0b2635ae224bc2aa45d386cdce1d79",
+      "End": "d259494d371e40a59a4293c616536bde",
+      "Id": "cf8951f928004bd0b89b51b1502b599c",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [],
+  "EnableLegacyPolyCurveBehavior": true,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Свойства",
+      "Version": "3.6",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "9.1",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "Нет",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "3.6.1.9895",
+      "RunType": "Manual",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Фоновый просмотр",
+      "EyeX": -17.0,
+      "EyeY": 24.0,
+      "EyeZ": 50.0,
+      "LookX": 12.0,
+      "LookY": -13.0,
+      "LookZ": -58.0,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "d91762324ac34552ba79135ec513c992",
+        "Name": "Python Script",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 1178.8253650883112,
+        "Y": 219.76726521642115
+      },
+      {
+        "Id": "8656e17981fa4a0298c19d9e8eb68ba8",
+        "Name": "Directory Path",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -1094.5838716733906,
+        "Y": 452.61088577772335
+      },
+      {
+        "Id": "1f843d8766f44941a67b91e66012c540",
+        "Name": "FileSystem.GetDirectoryContents",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 52.62929759152553,
+        "Y": 658.0884216921007
+      },
+      {
+        "Id": "d6660bebb4e04ee197b3908e6c441300",
+        "Name": "List.FilterByBoolMask",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 428.8238930170828,
+        "Y": 218.87967701696448
+      },
+      {
+        "Id": "9fe2713400de4bba858f40c5d210693a",
+        "Name": "String",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 231.85179847126062,
+        "Y": 858.680658458786
+      },
+      {
+        "Id": "5353e960dac34594a474df81ae752fe4",
+        "Name": "String.EndsWith",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 467.5446323015067,
+        "Y": 664.9831416848224
+      },
+      {
+        "Id": "2b9c9a1270fd4ce9a40dbfbb01c3d48a",
+        "Name": "Directory From Path",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -294.2816682778732,
+        "Y": 459.9259773040011
+      },
+      {
+        "Id": "e02a96f9c2ca43e6b645c06fe72b7d77",
+        "Name": "String",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 693.649616838782,
+        "Y": 345.3314032879584
+      },
+      {
+        "Id": "317e8d7ae7fa436db62bd9cc15decb4b",
+        "Name": "String",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 694.2197440013309,
+        "Y": 489.9613841960353
+      },
+      {
+        "Id": "b3ec46aa6ae0419b91a62d4bbee72ef1",
+        "Name": "Boolean",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 732.2278921201614,
+        "Y": 712.9840279547453
+      },
+      {
+        "Id": "74406ab12276477c9eaec9e57ad0eb24",
+        "Name": "Watch",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 1392.89753232382,
+        "Y": 222.28179022170013
+      },
+      {
+        "Id": "e1144bab592e4a92a3a558da243b93d0",
+        "Name": "Boolean",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -268.19467412654024,
+        "Y": 601.4446801187199
+      },
+      {
+        "Id": "a71759fd75df432cb5ee6d4cc3f5cf13",
+        "Name": "Directory Path",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 474.0585055681337,
+        "Y": 865.462883450138
+      }
+    ],
+    "Annotations": [],
+    "X": 126.66630468909989,
+    "Y": -73.4996060676375,
+    "Zoom": 0.7708794804273125
+  }
+}

@@ -1,0 +1,197 @@
+{
+  "Uuid": "538f9544-bcf9-4d95-a418-4061c0e04075",
+  "IsCustomNode": false,
+  "Description": "",
+  "Name": "Перезапись_версии семейст до_2026",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "CoreNodeModels.Input.Directory, CoreNodeModels",
+      "Id": "75ef2dddb51c4330a0c1e646968dcf0e",
+      "NodeType": "ExtensionNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "0094c18f93fc4d9d8853a7f359a28442",
+          "Name": "",
+          "Description": "Путь к каталогу",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Возможность выбрать каталог в системе и возврат пути к нему",
+      "HintPath": "C:\\Users\\popovvs1\\Desktop\\JOB\\REVIT\\Семейства\\01. В работе",
+      "InputValue": "C:\\Users\\popovvs1\\Desktop\\JOB\\REVIT\\Семейства\\01. В работе"
+    },
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "import clr\r\nimport System\r\nimport os\r\n\r\nclr.AddReference('RevitServices')\r\nimport RevitServices\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\nclr.AddReference('RevitAPI')\r\nimport Autodesk\r\nfrom Autodesk.Revit.DB import *\r\n\r\n# НАДЕЖНОЕ ИЗВЛЕЧЕНИЕ СТРОКИ ПУТИ (РЕШЕНИЕ ПРОБЛЕМЫ TYPEERROR)\r\nraw_input = IN\r\nif isinstance(raw_input, list):\r\n    root_folder = str(raw_input[0]) if len(raw_input) > 0 else \"\"\r\nelse:\r\n    root_folder = str(raw_input)\r\n\r\n# Очищаем от возможных случайных пробелов по краям\r\nroot_folder = root_folder.strip()\r\n\r\napp = RevitServices.Persistence.DocumentManager.Instance.CurrentUIApplication.Application\r\nlog = []\r\n\r\nopen_options = OpenOptions()\r\nopen_options.DetachFromCentralOption = DetachFromCentralOption.DoNotDetach\r\n\r\n# --- ЭТАП 1: Предварительная очистка старых бэкапов перед запуском ---\r\ndeleted_backups_count = 0\r\nif root_folder and os.path.isdir(root_folder):\r\n    for root, dirs, files in os.walk(root_folder):\r\n        for file in files:\r\n            # Ищем файлы, у которых перед расширением есть .00xx\r\n            if file.lower().endswith('.rfa') and len(file) > 9 and file[-9:-4].isdigit() and file[-10] == '.':\r\n                try:\r\n                    os.remove(os.path.join(root, file))\r\n                    deleted_backups_count += 1\r\n                except:\r\n                    pass\r\n\r\nif deleted_backups_count > 0:\r\n    log.append(\"Удалено старых бэкапов до начала обновления: {}\".format(deleted_backups_count))\r\n    log.append(\"-\" * 50)\r\n\r\n# --- ЭТАП 2: Сбор чистых файлов семейств для обновления ---\r\nfile_paths = []\r\nif root_folder and os.path.isdir(root_folder):\r\n    for root, dirs, files in os.walk(root_folder):\r\n        for file in files:\r\n            if file.lower().endswith('.rfa'):\r\n                # Дополнительная проверка, чтобы точно не взять бэкап\r\n                is_backup = len(file) > 9 and file[-9:-4].isdigit() and file[-10] == '.'\r\n                if not is_backup:\r\n                    file_paths.append(os.path.join(root, file))\r\n\r\n# --- ЭТАП 3: Обновление семейств и финальная зачистка ---\r\nif not file_paths:\r\n    log.append(\"Файлы .rfa в указанной папке не найдены. Проверенный путь: \" + root_folder)\r\nelse:\r\n    for path in file_paths:\r\n        try:\r\n            model_path = ModelPathUtils.ConvertUserVisiblePathToModelPath(path)\r\n            family_doc = app.OpenDocumentFile(model_path, open_options)\r\n            \r\n            family_doc.Save()\r\n            family_doc.Close(False)\r\n            log.append(\"Успешно обновлено: \" + path)\r\n            \r\n            # Сразу после сохранения удаляем свежесозданный бэкап .0001.rfa\r\n            backup_path = path[:-4] + \".0001.rfa\"\r\n            if os.path.exists(backup_path):\r\n                os.remove(backup_path)\r\n                \r\n        except Exception as e:\r\n            log.append(\"ОШИБКА при обработке \" + path + \": \" + str(e))\r\n\r\nOUT = log\r\n",
+      "Engine": "CPython3",
+      "VariableInputPorts": true,
+      "Id": "71c661c29ffc431588884eba2fb25da8",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "54ca1e46c9434b01ad503e0a290edb73",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "be071c4a22244f11b4f7e4f4be11c93f",
+          "Name": "OUT",
+          "Description": "Результат сценария Python",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Выполнение встроенного сценария Python."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Watch, CoreNodeModels",
+      "WatchWidth": 200.0,
+      "WatchHeight": 147.0,
+      "Id": "69b9a33baf914cf7b2447c529d115436",
+      "NodeType": "ExtensionNode",
+      "Inputs": [
+        {
+          "Id": "8f4fee8fdc3b49dfa811828604ad5380",
+          "Name": "",
+          "Description": "Узел для отображения выходных данных",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "fdec8c2ee9514f9a9d7e9d456504d22f",
+          "Name": "",
+          "Description": "Выходные данные узла",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Визуализация выходных данных узла"
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "0094c18f93fc4d9d8853a7f359a28442",
+      "End": "54ca1e46c9434b01ad503e0a290edb73",
+      "Id": "651ec85c89704616ac25d726dced0ae1",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "be071c4a22244f11b4f7e4f4be11c93f",
+      "End": "8f4fee8fdc3b49dfa811828604ad5380",
+      "Id": "f7faf889d8fe4ad981f948554811b2ff",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [],
+  "EnableLegacyPolyCurveBehavior": true,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Свойства",
+      "Version": "3.6",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "9.1",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "Нет",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "3.6.1.9895",
+      "RunType": "Manual",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Фоновый просмотр",
+      "EyeX": -17.0,
+      "EyeY": 24.0,
+      "EyeZ": 50.0,
+      "LookX": 12.0,
+      "LookY": -13.0,
+      "LookZ": -58.0,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "75ef2dddb51c4330a0c1e646968dcf0e",
+        "Name": "Directory Path",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -598.8289107180289,
+        "Y": 117.70077690442525
+      },
+      {
+        "Id": "71c661c29ffc431588884eba2fb25da8",
+        "Name": "Python Script",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -80.32810687432107,
+        "Y": 125.16810190725539
+      },
+      {
+        "Id": "69b9a33baf914cf7b2447c529d115436",
+        "Name": "Watch",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 131.92668568518297,
+        "Y": 123.8727907189189
+      }
+    ],
+    "Annotations": [],
+    "X": 519.2179128299279,
+    "Y": 233.08699961350788,
+    "Zoom": 0.3610719117759344
+  }
+}
